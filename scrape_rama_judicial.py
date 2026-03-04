@@ -13,7 +13,6 @@ Variables de entorno opcionales:
 
 import sys
 import json
-import time
 from collections import defaultdict
 from playwright.sync_api import sync_playwright
 
