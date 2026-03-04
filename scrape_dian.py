@@ -158,8 +158,8 @@ def extract_result(page) -> dict:
 
         for campo, elem_id in ids_exactos.items():
             try:
-                css_id = elem_id.replace(":", "\\:")
-                elem = page.locator(f'#{css_id}')
+                escaped = elem_id.replace(":", "\\:")
+                elem = page.locator(f'#{escaped}')
                 if elem.count() > 0:
                     value = elem.input_value() if elem.get_attribute('value') is not None else elem.inner_text()
                     if value:
@@ -186,6 +186,8 @@ def extract_result(page) -> dict:
 def consultar_rut(numero_documento: str) -> dict:
     """Realiza la consulta completa del estado RUT en la DIAN."""
 
+    MAX_RETRIES = 3
+
     with sync_playwright() as p:
         browser = None
         try:
@@ -195,47 +197,68 @@ def consultar_rut(numero_documento: str) -> dict:
                 args=['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
             )
 
-            context = browser.new_context(
-                viewport={'width': 1920, 'height': 1080},
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            )
-            page = context.new_page()
-            page.set_default_timeout(60000)
-
-            # Navegar a la pagina
-            print(f"Navegando a: {URL_DIAN}", file=sys.stderr)
-            page.goto(URL_DIAN, wait_until='domcontentloaded')
-            page.wait_for_timeout(3000)
-
-            # Verificar errores HTTP del sitio
-            page_title = page.title() or ''
-            body_text = page.inner_text('body') or ''
-            current_url = page.url or ''
-
-            if ('500' in page_title and 'Error' in page_title) or \
-               'Internal Server Error' in body_text or \
-               '503 Service' in page_title or \
-               'Service Temporarily Unavailable' in body_text:
-                return {
-                    'status': 'error',
-                    'message': f'El sitio de la DIAN no esta disponible (titulo: {page_title.strip() or "vacio"})'
-                }
-
-            if 'dian.gov.co/Paginas' in current_url or 'Inicio.aspx' in current_url:
-                return {
-                    'status': 'error',
-                    'message': 'El sistema MUISCA de la DIAN esta en mantenimiento'
-                }
-
-            # Verificar que el formulario existe
+            page = None
+            context = None
             nit_input_id = 'vistaConsultaEstadoRUT\\:formConsultaEstadoRUT\\:numNit'
-            try:
-                page.wait_for_selector(f'#{nit_input_id}', timeout=15000)
-            except Exception:
-                return {
-                    'status': 'error',
-                    'message': 'La pagina de la DIAN no cargo correctamente (formulario no encontrado)'
-                }
+
+            for attempt in range(1, MAX_RETRIES + 1):
+                if context:
+                    context.close()
+
+                context = browser.new_context(
+                    viewport={'width': 1920, 'height': 1080},
+                    user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                )
+                page = context.new_page()
+                page.set_default_timeout(60000)
+
+                # Navegar a la pagina
+                print(f"Navegando a: {URL_DIAN} (intento {attempt}/{MAX_RETRIES})", file=sys.stderr)
+                page.goto(URL_DIAN, wait_until='domcontentloaded')
+                page.wait_for_timeout(3000)
+
+                # Verificar errores HTTP del sitio
+                page_title = page.title() or ''
+                body_text = page.inner_text('body') or ''
+                current_url = page.url or ''
+
+                if ('500' in page_title and 'Error' in page_title) or \
+                   'Internal Server Error' in body_text or \
+                   '503 Service' in page_title or \
+                   'Service Temporarily Unavailable' in body_text:
+                    if attempt < MAX_RETRIES:
+                        print(f"DIAN error HTTP ({page_title.strip()}), reintentando en 3s...", file=sys.stderr)
+                        time.sleep(3)
+                        continue
+                    return {
+                        'status': 'error',
+                        'message': f'El sitio de la DIAN no esta disponible (titulo: {page_title.strip() or "vacio"})'
+                    }
+
+                if 'dian.gov.co/Paginas' in current_url or 'Inicio.aspx' in current_url:
+                    if attempt < MAX_RETRIES:
+                        print(f"DIAN redirigida al portal principal, reintentando en 3s...", file=sys.stderr)
+                        time.sleep(3)
+                        continue
+                    return {
+                        'status': 'error',
+                        'message': 'El sistema MUISCA de la DIAN esta en mantenimiento'
+                    }
+
+                # Verificar que el formulario existe
+                try:
+                    page.wait_for_selector(f'#{nit_input_id}', timeout=15000)
+                    print(f"Formulario DIAN cargado OK (intento {attempt})", file=sys.stderr)
+                    break  # Pagina cargada correctamente
+                except Exception:
+                    if attempt < MAX_RETRIES:
+                        print(f"Formulario no encontrado, reintentando en 3s...", file=sys.stderr)
+                        time.sleep(3)
+                        continue
+                    return {
+                        'status': 'error',
+                        'message': 'La pagina de la DIAN no cargo correctamente (formulario no encontrado)'
+                    }
 
             # Resolver Turnstile captcha
             print("Resolviendo Cloudflare Turnstile...", file=sys.stderr)
