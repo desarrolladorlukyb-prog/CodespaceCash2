@@ -158,7 +158,8 @@ def extract_result(page) -> dict:
 
         for campo, elem_id in ids_exactos.items():
             try:
-                elem = page.locator(f'#{elem_id.replace(":", "\\\\:")}')
+                css_id = elem_id.replace(":", "\\:")
+                elem = page.locator(f'#{css_id}')
                 if elem.count() > 0:
                     value = elem.input_value() if elem.get_attribute('value') is not None else elem.inner_text()
                     if value:
@@ -248,18 +249,18 @@ def consultar_rut(numero_documento: str) -> dict:
 
             # Inyectar el token en la pagina
             print("Inyectando token de Turnstile...", file=sys.stderr)
-            inject_result = page.evaluate(f"""() => {{
+            inject_result = page.evaluate("""(token) => {
                 var tokenInput = document.querySelector('input[name="cf-turnstile-response"]');
-                if (tokenInput) {{
-                    tokenInput.value = '{turnstile_token}';
+                if (tokenInput) {
+                    tokenInput.value = token;
                     var hddToken = document.getElementById('vistaConsultaEstadoRUT:formConsultaEstadoRUT:hddToken');
-                    if (hddToken) {{
-                        hddToken.value = '{turnstile_token}';
-                    }}
+                    if (hddToken) {
+                        hddToken.value = token;
+                    }
                     return true;
-                }}
+                }
                 return false;
-            }}""")
+            }""", turnstile_token)
 
             if not inject_result:
                 return {
